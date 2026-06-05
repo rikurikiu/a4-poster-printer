@@ -101,11 +101,19 @@
     </label>
 
     <div class="ctrl">
-      <label>完成サイズ</label>
+      <label>サイズ（最大）</label>
       <select id="size">
         <option value="A1" selected>A1（594×841mm）</option>
         <option value="A0">A0（841×1189mm）</option>
         <option value="A2">A2（420×594mm）</option>
+      </select>
+    </div>
+
+    <div class="ctrl">
+      <label>はみ出し</label>
+      <select id="sizeMode">
+        <option value="fit" selected>画像全体を入れる（はみ出さない）</option>
+        <option value="exact">規格サイズちょうど（はみ出す場合あり）</option>
       </select>
     </div>
 
@@ -128,7 +136,7 @@
     </div>
 
     <div class="ctrl">
-      <label>画像の収め方</label>
+      <label>収め方（規格ちょうど時のみ）</label>
       <select id="fit">
         <option value="cover" selected>枠いっぱい（推奨）</option>
         <option value="contain">全体を表示（余白あり）</option>
@@ -184,6 +192,7 @@
     printBtn: document.getElementById('printBtn'),
     clearBtn: document.getElementById('clearBtn'),
     size: document.getElementById('size'),
+    sizeMode: document.getElementById('sizeMode'),
     orient: document.getElementById('orient'),
     cols: document.getElementById('cols'),
     rows: document.getElementById('rows'),
@@ -196,10 +205,16 @@
   };
 
   let currentSrc = null;
+  let imgW = 0, imgH = 0;   // 読み込んだ画像の実ピクセルサイズ
 
   function posterDims(){
     let [w,h] = SIZES[els.size.value];
     if(els.orient.value === 'landscape'){ [w,h] = [h,w]; }
+    // 「画像全体を入れる」モード：画像の縦横比を保ったまま、この最大サイズ枠内に収める（=はみ出さない）
+    if(els.sizeMode.value === 'fit' && imgW > 0 && imgH > 0){
+      const s = Math.min(w/imgW, h/imgH);
+      return { w: imgW*s, h: imgH*s };
+    }
     return { w, h };
   }
 
@@ -219,6 +234,9 @@
     const cols = Math.max(1, Math.min(8, parseInt(els.cols.value)||1));
     const rows = Math.max(1, Math.min(8, parseInt(els.rows.value)||1));
     const fit  = els.fit.value;
+    const mode = els.sizeMode.value;
+    // 「全体を入れる」時は枠の比率＝画像の比率なので fill で過不足なくぴったり（切れない）
+    const effFit = (mode === 'fit') ? 'fill' : fit;
     const overlap = parseInt(els.overlap.value)||0;
     const tileW = PW / cols;   // 1枚が分担する仕上がり幅(mm)
     const tileH = PH / rows;   // 1枚が分担する仕上がり高さ(mm)
@@ -227,9 +245,10 @@
     if(currentSrc){
       els.printBtn.disabled = false;
       els.info.innerHTML =
-        '完成サイズ <b>'+els.size.value+'（'+PW+'×'+PH+'mm）</b> ／ '+
-        '必要枚数 <b>'+(cols*rows)+'枚</b>（'+cols+'列×'+rows+'行）／ '+
-        '1枚の分担 約 <b>'+tileW.toFixed(0)+'×'+tileH.toFixed(0)+'mm</b>'+
+        '完成サイズ <b>'+Math.round(PW)+'×'+Math.round(PH)+'mm</b>'+
+        (mode==='fit' ? '（'+els.size.value+'以内に画像全体を配置・はみ出しなし）' : '（'+els.size.value+'ちょうど）')+
+        ' ／ 必要枚数 <b>'+(cols*rows)+'枚</b>（'+cols+'列×'+rows+'行）'+
+        ' ／ 1枚 約 <b>'+tileW.toFixed(0)+'×'+tileH.toFixed(0)+'mm</b>'+
         (overlap>0 ? '（＋のりしろ'+overlap+'mm）' : '');
     }else{
       els.printBtn.disabled = true;
@@ -244,8 +263,7 @@
     // 背景画像
     let imgHtml = '';
     if(currentSrc){
-      const objFit = fit==='fill' ? 'fill' : fit;
-      imgHtml = '<img class="full" src="'+currentSrc+'" style="object-fit:'+objFit+';">';
+      imgHtml = '<img class="full" src="'+currentSrc+'" style="object-fit:'+effFit+';">';
     }
     // グリッド線と番号
     let lines = '';
@@ -269,7 +287,7 @@
     els.poster.innerHTML = imgHtml + '<div class="grid-overlay">'+lines+nums+'</div>';
 
     // ---- 印刷用タイル生成 ----
-    buildPrint(PW, PH, cols, rows, tileW, tileH, fit, overlap);
+    buildPrint(PW, PH, cols, rows, tileW, tileH, effFit, overlap);
   }
 
   function buildPrint(PW, PH, cols, rows, tileW, tileH, fit, overlap){
@@ -316,7 +334,18 @@
   function loadFile(f){
     if(!f || !f.type.startsWith('image/')) return;
     const reader = new FileReader();
-    reader.onload = e => { currentSrc = e.target.result; render(); };
+    reader.onload = e => {
+      const im = new Image();
+      im.onload = () => {
+        imgW = im.naturalWidth; imgH = im.naturalHeight;
+        currentSrc = e.target.result;
+        // 画像の向きに合わせて自動で縦/横を選択
+        els.orient.value = (imgW >= imgH) ? 'landscape' : 'portrait';
+        suggestGrid();   // 分割数を自動再計算
+        render();
+      };
+      im.src = e.target.result;
+    };
     reader.readAsDataURL(f);
   }
 
@@ -333,6 +362,7 @@
   // サイズ／向きを変えたら分割数を自動提案
   els.size.addEventListener('change', () => { suggestGrid(); render(); });
   els.orient.addEventListener('change', () => { suggestGrid(); render(); });
+  els.sizeMode.addEventListener('change', () => { suggestGrid(); render(); });
 
   ['cols','rows','fit','showCut','showLabel'].forEach(id =>
     els[id].addEventListener('change', render));
