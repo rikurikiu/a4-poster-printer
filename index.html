@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A1分割ポスター印刷アプリ</title>
+<style>
+  *{ box-sizing: border-box; }
+  body{
+    margin:0;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    background:#eef1f5; color:#1f2937;
+  }
+
+  /* ===== 操作パネル ===== */
+  .panel{
+    position: sticky; top:0; z-index:10;
+    background:#fff; border-bottom:1px solid #d8dde6;
+    padding:14px 18px; box-shadow:0 2px 8px rgba(0,0,0,.06);
+  }
+  .panel h1{ font-size:18px; margin:0 0 4px; }
+  .panel h1 small{ font-weight:normal; color:#6b7280; font-size:13px; }
+  .row{ display:flex; flex-wrap:wrap; gap:16px 20px; align-items:center; }
+  .ctrl{ display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  .ctrl label{ color:#4b5563; }
+  .ctrl input[type=range]{ width:130px; }
+  .ctrl .val{ color:#2563eb; font-weight:bold; }
+  select{ font-size:13px; padding:4px 6px; }
+  .num{ width:54px; font-size:13px; padding:4px 6px; }
+
+  .btn{ border:none; border-radius:8px; padding:11px 22px; font-size:15px; font-weight:bold; cursor:pointer; }
+  .btn-print{ background:#2563eb; color:#fff; }
+  .btn-print:hover{ background:#1d4ed8; }
+  .btn-print:disabled{ background:#9ca3af; cursor:not-allowed; }
+  .btn-clear{ background:#e5e7eb; color:#374151; }
+
+  .drop{
+    border:2px dashed #93a3b8; border-radius:10px; padding:10px 16px;
+    cursor:pointer; background:#f8fafc; font-size:13px; color:#475569;
+  }
+  .drop.over{ background:#dbeafe; border-color:#2563eb; }
+
+  .info{ font-size:13px; color:#374151; background:#f1f5f9; border-radius:8px; padding:8px 12px; }
+  .info b{ color:#2563eb; }
+  .hint{ font-size:12px; color:#6b7280; margin-top:8px; }
+
+  /* ===== プレビュー（組み上がりイメージ） ===== */
+  .stage{ padding:24px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .stage .caption{ font-size:13px; color:#6b7280; }
+
+  .poster{
+    position:relative; background:#fff; box-shadow:0 6px 24px rgba(0,0,0,.18);
+  }
+  .poster img.full{
+    position:absolute; inset:0; width:100%; height:100%; display:block;
+  }
+  .grid-overlay{ position:absolute; inset:0; pointer-events:none; }
+  .grid-overlay .gline{ position:absolute; background:rgba(37,99,235,.55); }
+  .grid-overlay .gline.v{ width:2px; top:0; bottom:0; }
+  .grid-overlay .gline.h{ height:2px; left:0; right:0; }
+  .grid-overlay .gnum{
+    position:absolute; transform:translate(-50%,-50%);
+    background:rgba(37,99,235,.85); color:#fff; font-size:12px; font-weight:bold;
+    padding:2px 7px; border-radius:10px; white-space:nowrap;
+  }
+
+  /* ===== 印刷用タイル（通常時は非表示） ===== */
+  .print-area{ display:none; }
+  .tile{
+    width:210mm; height:297mm; position:relative; overflow:hidden;
+    page-break-after:always; break-after:page;
+    display:flex; align-items:center; justify-content:center;
+    background:#fff;
+  }
+  .tile-frame{ position:relative; overflow:hidden; }
+  .tile-frame img{ position:absolute; display:block; }
+  /* 切り取り（仕上がり）線 */
+  .cutline{ position:absolute; border:1px dashed #cc2222; pointer-events:none; }
+  .tile-label{
+    position:absolute; top:4mm; left:4mm; font-size:9pt; color:#444;
+    background:rgba(255,255,255,.7); padding:1px 5px; border-radius:4px;
+  }
+
+  @page{ size: A4 portrait; margin: 0; }
+  @media print{
+    .panel, .stage{ display:none !important; }
+    body{ background:#fff; }
+    .print-area{ display:block; }
+  }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <h1>A1 分割ポスター印刷アプリ <small>画像を大判サイズに拡大し、A4に分割して印刷 → 貼り合わせて1枚のポスターに</small></h1>
+
+  <div class="row">
+    <label class="drop" id="drop">
+      📷 画像を選択（クリック / ドラッグ）
+      <input type="file" id="file" accept="image/*" hidden>
+    </label>
+
+    <div class="ctrl">
+      <label>完成サイズ</label>
+      <select id="size">
+        <option value="A1" selected>A1（594×841mm）</option>
+        <option value="A0">A0（841×1189mm）</option>
+        <option value="A2">A2（420×594mm）</option>
+      </select>
+    </div>
+
+    <div class="ctrl">
+      <label>向き</label>
+      <select id="orient">
+        <option value="portrait" selected>縦</option>
+        <option value="landscape">横</option>
+      </select>
+    </div>
+
+    <div class="ctrl">
+      <label>分割数（列 × 行）</label>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <input class="num" type="number" id="cols" min="1" max="8" value="3">
+        <span>×</span>
+        <input class="num" type="number" id="rows" min="1" max="8" value="3">
+        <span style="font-size:11px;color:#9ca3af;">枚</span>
+      </div>
+    </div>
+
+    <div class="ctrl">
+      <label>画像の収め方</label>
+      <select id="fit">
+        <option value="cover" selected>枠いっぱい（推奨）</option>
+        <option value="contain">全体を表示（余白あり）</option>
+        <option value="fill">枠に合わせて変形</option>
+      </select>
+    </div>
+
+    <div class="ctrl">
+      <label>のりしろ <span class="val" id="overlapVal">5</span> mm</label>
+      <input type="range" id="overlap" min="0" max="15" value="5">
+    </div>
+
+    <div class="ctrl">
+      <label><input type="checkbox" id="showCut" checked> 切り取り線を印刷</label>
+      <label><input type="checkbox" id="showLabel" checked> ページ番号を印刷</label>
+    </div>
+
+    <button class="btn btn-print" id="printBtn" disabled>🖨 印刷する</button>
+    <button class="btn btn-clear" id="clearBtn">クリア</button>
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <div class="info" id="info">画像を読み込むと、必要枚数と1枚あたりの分担範囲を表示します。</div>
+  </div>
+
+  <div class="hint">
+    印刷のコツ：用紙=A4 / 余白=なし / 倍率=100%（「用紙に合わせる」はOFF）/ 「背景のグラフィック」をON。
+    印刷後、<b>赤い切り取り線</b>で切って、のりしろ部分を重ねて貼り合わせてください。PDF保存も同じ手順です。
+  </div>
+</div>
+
+<div class="stage">
+  <div class="caption">▼ 組み上がりイメージ（青い線が用紙の境目、番号は印刷順）</div>
+  <div class="poster" id="poster">
+    <div class="grid-overlay" id="overlay"></div>
+  </div>
+</div>
+
+<!-- 印刷用タイルはここに生成 -->
+<div class="print-area" id="printArea"></div>
+
+<script>
+  // A系列サイズ（mm, 縦向き基準 w×h）
+  const SIZES = { A0:[841,1189], A1:[594,841], A2:[420,594] };
+  const PREVIEW_MAXW = 520; // プレビュー表示の最大幅(px)
+
+  const els = {
+    file: document.getElementById('file'),
+    drop: document.getElementById('drop'),
+    poster: document.getElementById('poster'),
+    overlay: document.getElementById('overlay'),
+    printArea: document.getElementById('printArea'),
+    printBtn: document.getElementById('printBtn'),
+    clearBtn: document.getElementById('clearBtn'),
+    size: document.getElementById('size'),
+    orient: document.getElementById('orient'),
+    cols: document.getElementById('cols'),
+    rows: document.getElementById('rows'),
+    fit: document.getElementById('fit'),
+    overlap: document.getElementById('overlap'),
+    overlapVal: document.getElementById('overlapVal'),
+    showCut: document.getElementById('showCut'),
+    showLabel: document.getElementById('showLabel'),
+    info: document.getElementById('info'),
+  };
+
+  let currentSrc = null;
+
+  function posterDims(){
+    let [w,h] = SIZES[els.size.value];
+    if(els.orient.value === 'landscape'){ [w,h] = [h,w]; }
+    return { w, h };
+  }
+
+  function suggestGrid(){
+    // A4印刷可能域をざっくり 200×287mm として必要枚数を自動提案
+    const { w, h } = posterDims();
+    const cols = Math.max(1, Math.ceil(w / 200));
+    const rows = Math.max(1, Math.ceil(h / 287));
+    els.cols.value = cols;
+    els.rows.value = rows;
+  }
+
+  function render(){
+    els.overlapVal.textContent = els.overlap.value;
+
+    const { w:PW, h:PH } = posterDims();
+    const cols = Math.max(1, Math.min(8, parseInt(els.cols.value)||1));
+    const rows = Math.max(1, Math.min(8, parseInt(els.rows.value)||1));
+    const fit  = els.fit.value;
+    const overlap = parseInt(els.overlap.value)||0;
+    const tileW = PW / cols;   // 1枚が分担する仕上がり幅(mm)
+    const tileH = PH / rows;   // 1枚が分担する仕上がり高さ(mm)
+
+    // ---- 情報表示 ----
+    if(currentSrc){
+      els.printBtn.disabled = false;
+      els.info.innerHTML =
+        '完成サイズ <b>'+els.size.value+'（'+PW+'×'+PH+'mm）</b> ／ '+
+        '必要枚数 <b>'+(cols*rows)+'枚</b>（'+cols+'列×'+rows+'行）／ '+
+        '1枚の分担 約 <b>'+tileW.toFixed(0)+'×'+tileH.toFixed(0)+'mm</b>'+
+        (overlap>0 ? '（＋のりしろ'+overlap+'mm）' : '');
+    }else{
+      els.printBtn.disabled = true;
+      els.info.textContent = '画像を読み込むと、必要枚数と1枚あたりの分担範囲を表示します。';
+    }
+
+    // ---- プレビュー（組み上がりイメージ） ----
+    const scale = PREVIEW_MAXW / PW;            // px/mm
+    els.poster.style.width  = (PW*scale)+'px';
+    els.poster.style.height = (PH*scale)+'px';
+
+    // 背景画像
+    let imgHtml = '';
+    if(currentSrc){
+      const objFit = fit==='fill' ? 'fill' : fit;
+      imgHtml = '<img class="full" src="'+currentSrc+'" style="object-fit:'+objFit+';">';
+    }
+    // グリッド線と番号
+    let lines = '';
+    for(let c=1;c<cols;c++){
+      lines += '<div class="gline v" style="left:'+(c*tileW*scale)+'px;"></div>';
+    }
+    for(let r=1;r<rows;r++){
+      lines += '<div class="gline h" style="top:'+(r*tileH*scale)+'px;"></div>';
+    }
+    let nums = '';
+    let n=0;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        n++;
+        const x = (c*tileW + tileW/2)*scale;
+        const y = (r*tileH + tileH/2)*scale;
+        nums += '<div class="gnum" style="left:'+x+'px;top:'+y+'px;">'+n+'</div>';
+      }
+    }
+    // poster の中身を入れ替え（img + overlay）
+    els.poster.innerHTML = imgHtml + '<div class="grid-overlay">'+lines+nums+'</div>';
+
+    // ---- 印刷用タイル生成 ----
+    buildPrint(PW, PH, cols, rows, tileW, tileH, fit, overlap);
+  }
+
+  function buildPrint(PW, PH, cols, rows, tileW, tileH, fit, overlap){
+    els.printArea.innerHTML = '';
+    if(!currentSrc) return;
+
+    const objFit = fit==='fill' ? 'fill' : fit;
+    let n=0;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        n++;
+        // このタイルが表示する範囲（のりしろ込み）。ポスター外にははみ出さないようクランプ
+        const x0 = Math.max(0, c*tileW - overlap);
+        const y0 = Math.max(0, r*tileH - overlap);
+        const x1 = Math.min(PW, (c+1)*tileW + overlap);
+        const y1 = Math.min(PH, (r+1)*tileH + overlap);
+        const fw = x1 - x0;   // フレーム幅(mm)
+        const fh = y1 - y0;   // フレーム高さ(mm)
+
+        // 仕上がり線（のりしろを除いた本来の境界）のフレーム内オフセット
+        const cutL = (c*tileW) - x0;
+        const cutT = (r*tileH) - y0;
+
+        const label = els.showLabel.checked
+          ? '<div class="tile-label">'+n+' / '+(cols*rows)+'　（'+(c+1)+'列 '+(r+1)+'行）</div>' : '';
+        const cut = els.showCut.checked
+          ? '<div class="cutline" style="left:'+cutL+'mm;top:'+cutT+'mm;width:'+tileW+'mm;height:'+tileH+'mm;"></div>' : '';
+
+        const tile =
+          '<div class="tile">'+
+            '<div class="tile-frame" style="width:'+fw+'mm;height:'+fh+'mm;">'+
+              '<img src="'+currentSrc+'" style="'+
+                'width:'+PW+'mm;height:'+PH+'mm;object-fit:'+objFit+';'+
+                'left:'+(-x0)+'mm;top:'+(-y0)+'mm;">'+
+              cut +
+            '</div>'+
+            label +
+          '</div>';
+        els.printArea.insertAdjacentHTML('beforeend', tile);
+      }
+    }
+  }
+
+  function loadFile(f){
+    if(!f || !f.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = e => { currentSrc = e.target.result; render(); };
+    reader.readAsDataURL(f);
+  }
+
+  // イベント
+  els.file.addEventListener('change', e => loadFile(e.target.files[0]));
+  ['dragenter','dragover'].forEach(ev =>
+    els.drop.addEventListener(ev, e => { e.preventDefault(); els.drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev =>
+    els.drop.addEventListener(ev, e => { e.preventDefault(); els.drop.classList.remove('over'); }));
+  els.drop.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => { e.preventDefault(); if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+
+  // サイズ／向きを変えたら分割数を自動提案
+  els.size.addEventListener('change', () => { suggestGrid(); render(); });
+  els.orient.addEventListener('change', () => { suggestGrid(); render(); });
+
+  ['cols','rows','fit','showCut','showLabel'].forEach(id =>
+    els[id].addEventListener('change', render));
+  els.overlap.addEventListener('input', render);
+
+  els.printBtn.addEventListener('click', () => window.print());
+  els.clearBtn.addEventListener('click', () => { currentSrc=null; els.file.value=''; render(); });
+
+  render();
+</script>
+</body>
+</html>
